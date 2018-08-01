@@ -3,7 +3,8 @@ import http
 import subprocess
 import Crypto
 
-class SchadenClient(object):
+
+class ShadeClient(object):
     def __init__(self):
         self.cryptor = CryptoProvider()
         self.holder = ExHandler()
@@ -28,29 +29,38 @@ class CryptoProvider(object):
         #TODO
         return 0
 
+
 class ExHandler(object):
     def __init__(self):
         return 0
         #TODO
 
+
 class _ConnectionManager(object):
     def __init__(self):
         self.connection_list = []
 
+
 class Gate(object):
     def __init__(self, error_handler=None):
         self.error = error_handler
+        self.gateway = socket.socket(family=socket.AF_INET,
+                                     type=socket.SOCK_STREAM)
+
+        self.closemark = False
 
     def open(self):
+        if self.closemark:
+            error_handler.warn('gate_closed', 3)
+            return -1
+            
         self.gateway.bind(self.addr)
-        while True:
-            self.gateway.listen(5)
-    
-            self._host_conn, self._host_addr = self.gateway.accept()
-            self.data = self._host_conn.recv(2048)
-            self.data = self.data.decode('ascii')
 
-        return 0
+    def close(self):
+        self.gateway.shutdown(socket.SHUT_RDWR)
+        self.gateway.close()
+        self.closemark = True
+
 
 class InnerGate(Gate):
     def __init__(self, port = 50600, error_handler=None):
@@ -58,10 +68,20 @@ class InnerGate(Gate):
         self.received_conn = ''
         self.received_addr = ''
         self.addr = ('127.0.0.1', port)
-        self.data = bytes()
 
-        self.gateway = socket.socket(family=socket.AF_INET,
-                                     type=socket.SOCK_STREAM)
+    def open(self, conmanager):
+        super().open()
+
+        while True:
+            self.gateway.listen(5)
+    
+            self.received_conn, self.received_addr = self.gateway.accept()
+            conmanager.register((self.received_conn, self.received_addr))
+
+
+class ExternalGate(Gate):
+    def __init__(self, schadserv, error_handler=None):
+        super().__init__(error_handler)
 
 
 if __name__ == '__main__':
