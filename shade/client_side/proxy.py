@@ -5,22 +5,31 @@ modificate the packages in a special way (encryption, first of all).
 '''
 
 import socket
-import http
-import subprocess
+import threading
+import configparser
+import queue
+import time
 import Crypto
 
 
 class ShadeClient(object):
     '''Main clients object, manages all the other operations. Should be the SINGLE
     instance of this class in the application'''
+
     def __init__(self):
-        self.holder = ExHandler()
-        self.coordinator = Coordinator()
-        self.connection_manager = ConnectionManager()
-        self.inner_gate = InnerGate()
+        self.configuration = {
+            'TunnelsCount' : 6,
+            'MaxConnPerTunnel' : 50
+        }
+        self.config()
+
+        self.holder = EvHandler(self.configuration)
+        self.connection_manager = ConnectionManager(self.configuration)
+        self.inner_gate = InnerGate(self.configuration)
 
     def run(self):
         '''Launchs the application, starts the main loop'''
+
         self.inner_gate.open()
 
         while True:
@@ -31,12 +40,20 @@ class ShadeClient(object):
         '''Correctly stops the application, should be use in whatever conditions,
         even if an error has been occured. Should be called by EventHandler in
         critical cases.'''
+
         #TODO
         return 0
+
+    def config(self):
+
+        conf = configparser.ConfigParser()
+        #TODO
+
 
 
 class MODULE_CryptoProvider(object):
     '''Middleware module used to encrypt the users traffic'''
+
     def __init__(self):
         #TODO
         return 0
@@ -46,9 +63,33 @@ class EvHandler(object):
     '''Should be the single instance of this class per application. EventHadler is used
     for logging and solving the exceptional situations if it is possible. Debug
     is also the reason to use EvHandler'''
+
     def __init__(self):
         return 0
         #TODO
+
+
+class Tunnel(object):
+    '''doc'''
+
+    def __init__(self, qMax, cmanager):
+        self.stream = threading.Thread(target=self.run)
+        self.queue = queue.Queue(maxsize=qMax)
+        self.middleware_processor = MiddlewareManager()
+        self.conmanager = cmanager
+        self.gate = ExternalGate()
+
+    def run(self):
+        while True:
+            if self.queue.empty:
+                time.sleep(0.3)
+                continue
+
+            proceed_data = self.middleware_processor.prepare(self.queue.get())
+            response = self.gate.send(proceed_data)
+            
+            retrieved_data = self.middleware_processor.load(response)
+            self.conmanager.return_to_client(retrieved_data)
 
 
 class ConnectionManager(object):
@@ -57,13 +98,47 @@ class ConnectionManager(object):
     responsible for managing the taffics retransmission to the MiddlewareManager.
     IMPORTANT NOTE: Don`t use the ConnectionManager to directly pass the data to the
     middleware modules. Use the MiddlewareManager instead'''
-    def __init__(self):
+
+    def __init__(self, conf, evhandler):
+        self.handler = evhandler
+        self.conf = conf
         self.connection_table = {}
+        self.tunnels = []
         self.condescriptor = 0
 
+        for i in range(self.conf[TunnelsCount]):
+            self.tunnles.append(Tunnel(self.conf['MaxConnPerTunnel'], self))
+
     def register(self, reqconn, reqaddr):
-        self.connection_table[self._get_descriptor()] = (reqconn, reqaddr)
-        self.recv_msg()
+        cur_desc = self._get_descriptor()
+        self.connection_table[cur_desc] = (reqconn, reqaddr)
+        data = self.recv_msg(reqconn)
+        while True:
+            _tunnel = self._get_able_tunnel()
+            if _tunnel:
+                _tunnel.queue.put((data, cur_desc))
+                break
+            else:
+                self.handler.warn('tunnels_busy', 1)
+                time.sleep(0.1)
+
+    def recv_msg(self, conn):
+        package = conn.recvmsg(1024)
+        while True:
+            data = conn.recvmsg(1024)
+            if not data:
+                return package
+            else:
+                package+=data
+
+    def _get_able_tunnel(self):
+        minqueue = tunnels[0].queue.qsize()
+        index = 0
+        for tun in enumerate(tunnels):
+            if tun[1].qsize() < minqueue:
+                minqueue = tun[1].qsize()
+                index = tun[0]
+        return tunnels[index]
 
     def _get_descriptor(self):
         self.conndescriptor += 1
@@ -71,6 +146,7 @@ class ConnectionManager(object):
 
 class MiddlewareManager(object):
     '''MiddlewareManager is used to manage the data passing through the middleware layer'''
+
     def __init__(self):
         pass
 
@@ -79,8 +155,9 @@ class Gate(object):
     '''Prototype class for Inner and External classes. It is also can be used as
     the wrapper over the any other connection socket, but it is strongly reccomended
     to use it as an abstract one'''
+
     def __init__(self, event_handler=None):
-        self.error = event_handler
+        self.handler = event_handler
         self.gateway = socket.socket(family=socket.AF_INET,
                                      type=socket.SOCK_STREAM)
 
@@ -89,8 +166,9 @@ class Gate(object):
     def open(self):
         '''Abstract method, prototype for the methods used to start the gates main
         functional. Throws a warning if the gate is closed.'''
+
         if self.closemark:
-            event_handler.warn('gate_closed', 3)
+            self.handler.warn('gate_closed', 3)
             return -1
             
         self.gateway.bind(self.addr)
@@ -100,6 +178,7 @@ class Gate(object):
         the life of the gate and close all the connections established in it at the moment.
         NOTE: it is impossible to use the closed Gate anymore. Closed gates should be garbagecollected,
         close() method is designed to prepare gates to it'''
+
         self.gateway.shutdown(socket.SHUT_RDWR)
         self.gateway.close()
         self.closemark = True
@@ -112,6 +191,7 @@ class InnerGate(Gate):
     and then send it to the ConnectionManager.
     NOTE: Don`t use InnerGate to send responses for the clients requests. It is the task for 
     ConnectionManager'''
+
     def __init__(self, port = 50600, event_handler=None):
         super().__init__(event_handler)
         self.received_conn = ''
@@ -134,6 +214,7 @@ class InnerGate(Gate):
 class ExternalGate(Gate):
     '''ExternalGates are used to communicate with the remote ShadeServer, which will commutate the clients
     cleared traffic'''
+
     def __init__(self, shadeserv, event_handler=None):
         super().__init__(event_handler)
         self.gateway.connect(shadeserv)
