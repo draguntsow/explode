@@ -9,7 +9,6 @@ import threading
 import configparser
 import queue
 import time
-import Crypto
 
 
 class ShadeClient(object):
@@ -50,15 +49,6 @@ class ShadeClient(object):
         #TODO
 
 
-
-class MODULE_CryptoProvider(object):
-    '''Middleware module used to encrypt the users traffic'''
-
-    def __init__(self):
-        #TODO
-        return 0
-
-
 class EvHandler(object):
     '''Should be the single instance of this class per application. EventHadler is used
     for logging and solving the exceptional situations if it is possible. Debug
@@ -68,6 +58,10 @@ class EvHandler(object):
         return 0
         #TODO
 
+    def warn(self):
+        pass
+        #TODO
+
 
 class Tunnel(object):
     '''doc'''
@@ -75,6 +69,8 @@ class Tunnel(object):
     def __init__(self, qMax, cmanager):
         self.stream = threading.Thread(target=self.run)
         self.queue = queue.Queue(maxsize=qMax)
+        self.qu_congestion = 0
+        self.qu_limit = qMax
         self.middleware_processor = MiddlewareManager()
         self.conmanager = cmanager
         self.gate = ExternalGate()
@@ -88,8 +84,26 @@ class Tunnel(object):
             proceed_data = self.middleware_processor.prepare(self.queue.get())
             response = self.gate.send(proceed_data)
             
-            retrieved_data = self.middleware_processor.load(response)
-            self.conmanager.return_to_client(retrieved_data)
+            responsed_data = self.middleware_processor.load(response)
+            self.conmanager.return_to_client(retrieved_data, descriptor)
+            self.qu_congestion = self.qu_congestion - 1
+
+    def _is_able(self):
+        if qu_congestion == qu_limit:
+            return False
+
+        else:
+            return qu_congestion
+    
+    def enqueue(self, datadesc):
+        ability = self_is_able()
+        if not ability:
+            return False
+
+        else: 
+            self.queue.put(datadesc)
+            self.qu_congestion += 1
+            return self.qu_limit - self.qu_congestion
 
 
 class ConnectionManager(object):
@@ -113,8 +127,8 @@ class ConnectionManager(object):
         cur_desc = self._get_descriptor()
         self.connection_table[cur_desc] = (reqconn, reqaddr)
         data = self.recv_msg(reqconn)
-        while True:
-            _tunnel = self._get_able_tunnel()
+
+        for tun in tunnels: #NOTE: This algorithm should be deprecated: the most free of the tunnels should be used, not in Tetris style
             if _tunnel:
                 _tunnel.queue.put((data, cur_desc))
                 break
@@ -127,15 +141,20 @@ class ConnectionManager(object):
         while True:
             data = conn.recvmsg(1024)
             if not data:
-                return package
+                break
             else:
                 package+=data
+        return package
+
+    def return_to_client(self, data):
+        pass
+        #TODO
 
     def _get_able_tunnel(self):
         minqueue = tunnels[0].queue.qsize()
         index = 0
         for tun in enumerate(tunnels):
-            if tun[1].qsize() < minqueue:
+            if tun[1].queue.qsize() < minqueue:
                 minqueue = tun[1].qsize()
                 index = tun[0]
         return tunnels[index]
@@ -149,6 +168,15 @@ class MiddlewareManager(object):
 
     def __init__(self):
         pass
+        #TODO
+
+    def prepare(self, data):
+        pass
+        #TODO
+
+    def load(self, data):
+        pass
+        #TODO
 
 
 class Gate(object):
