@@ -16,9 +16,10 @@ class ShadeClient(object):
     instance of this class in the application'''
 
     def __init__(self):
-        self.configuration = {
+        self.configuration = { #DEBUG CONSTANTS SHOULD BE REMOVED IN PRODUCTION
             'TunnelsCount' : 6,
-            'MaxConnPerTunnel' : 50
+            'MaxConnPerTunnel' : 50,
+            'Middlewares' : ['middle1.py', 'middle2.py'],
         }
         self.config()
 
@@ -32,6 +33,7 @@ class ShadeClient(object):
         self.inner_gate.open()
 
         while True:
+            pass
 
         return 0
 
@@ -84,26 +86,15 @@ class Tunnel(object):
             proceed_data = self.middleware_processor.prepare(self.queue.get())
             response = self.gate.send(proceed_data)
             
-            responsed_data = self.middleware_processor.load(response)
+            responsed_data = self.middleware_processor.retrieve(response)
             self.conmanager.return_to_client(retrieved_data, descriptor)
             self.qu_congestion = self.qu_congestion - 1
 
-    def _is_able(self):
-        if qu_congestion == qu_limit:
-            return False
+    def get_capacity(self):
+        return qu_limit - qu_congestion
 
-        else:
-            return qu_congestion
-    
-    def enqueue(self, datadesc):
-        ability = self_is_able()
-        if not ability:
-            return False
-
-        else: 
-            self.queue.put(datadesc)
-            self.qu_congestion += 1
-            return self.qu_limit - self.qu_congestion
+    def enqueue(self, _data, _descriptor):
+        self.queue.put((_data, _descriptor))
 
 
 class ConnectionManager(object):
@@ -121,20 +112,19 @@ class ConnectionManager(object):
         self.condescriptor = 0
 
         for i in range(self.conf[TunnelsCount]):
-            self.tunnles.append(Tunnel(self.conf['MaxConnPerTunnel'], self))
+            self.tunnels.append(Tunnel(self.conf['MaxConnPerTunnel'], self))
 
     def register(self, reqconn, reqaddr):
         cur_desc = self._get_descriptor()
         self.connection_table[cur_desc] = (reqconn, reqaddr)
         data = self.recv_msg(reqconn)
-
-        for tun in tunnels: #NOTE: This algorithm should be deprecated: the most free of the tunnels should be used, not in Tetris style
-            if _tunnel:
-                _tunnel.queue.put((data, cur_desc))
-                break
-            else:
-                self.handler.warn('tunnels_busy', 1)
-                time.sleep(0.1)
+        
+        free_tunnel = self._get_able_tunnel()
+        if free_tunnel:
+            self.tunnels[free_tunnel].queue.put(data, cur_desc)
+        else:
+            self.handler.warn('tunnels_busy', 1)
+            time.sleep(0.1)
 
     def recv_msg(self, conn):
         package = conn.recvmsg(1024)
@@ -151,13 +141,16 @@ class ConnectionManager(object):
         #TODO
 
     def _get_able_tunnel(self):
-        minqueue = tunnels[0].queue.qsize()
-        index = 0
-        for tun in enumerate(tunnels):
-            if tun[1].queue.qsize() < minqueue:
-                minqueue = tun[1].qsize()
-                index = tun[0]
-        return tunnels[index]
+        _free_tunnel = False
+        _maximal = 0
+
+        for _tunnel in enumerate(self.tunnels):
+            _capacity = _tunnel[1].get_capacity()
+            if _capacity > _maximal:
+                _maximal = _capacity
+                _free_tunnel = _tunnel[0]
+
+        return _free_tunnel
 
     def _get_descriptor(self):
         self.conndescriptor += 1
@@ -166,13 +159,25 @@ class ConnectionManager(object):
 class MiddlewareManager(object):
     '''MiddlewareManager is used to manage the data passing through the middleware layer'''
 
-    def __init__(self):
-        pass
-        #TODO
+    def __init__(self, configuration):
+        
+        self.config = configuration
+        self.middleware_list = list(map((lambda x: 'middlewares/'+x), self.config['Middlewares']))
+        self.middlewares = map(__import__, self.middleware_list)
 
     def prepare(self, data):
-        pass
-        #TODO
+        '''Main method used to collaborate with middlewarers. Filters data through the layer
+        of middleware. The middleware API is documented better in MIDDLEWARE.documentation (TODO).
+        Main points: each middleware module should be represented as a .py script in the 
+        "middleware" module and provide the "process" method, which takes the data argument - 
+        the package, procceeded by the previous middleware (or the raw package, if it is the
+        first) and returns the proceed data'''
+        _data = data
+        #TODO: Should exist the way to proceed data if there are no available middlewares enabled in config
+        for mid in self.middlewares: 
+            _data = mid.process(data) #NOTE: It is unclear, how should it work
+
+        return _data
 
     def load(self, data):
         pass
@@ -249,6 +254,25 @@ class ExternalGate(Gate):
 
     def close(self):
         super().__init__(event_handler)
+
+    def send(self, data):
+        self.gateway.sendall(data)
+        response = bytes()
+        while not reponse:
+            response = self._recv_response(response)
+            if response:
+                break
+            else:
+                time.sleep(0.2)
+
+        return response
+
+    def _recv_response(self, resp):
+        buffer = self.gateway.recv(2048)
+        if buffer:
+            return self._recv_response(resp+buffer)
+        else:
+            return resp
 
 
 if __name__ == '__main__':
