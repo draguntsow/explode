@@ -66,7 +66,13 @@ class EvHandler(object):
 
 
 class Tunnel(object):
-    '''doc'''
+    '''Tunnels are the abstractions used to transmit the data from the internal gate to
+    the remote Shade server in a multi thread way. Each tunnel has its own external 
+    gate and MiddleWareManager, it allows to avoid the unwanted delays caused by
+    the generic resource use. Each tunnel has the limit of connections (queue) which
+    works in LILO model. If the queue is full, tunnel will reduce new connections.
+    To avoid such an issue it is recommended to increase the tunnels count or their
+    queues capacity, but be careful - these values should be balanced.'''
 
     def __init__(self, qMax, cmanager):
         self.stream = threading.Thread(target=self.run)
