@@ -15,25 +15,25 @@ class ShadeClient(object):
     '''Main clients object, manages all the other operations. Should be the SINGLE
     instance of this class in the application'''
 
-    def __init__(self):
+    def init(self):
         self.configuration = { #DEBUG CONSTANTS SHOULD BE REMOVED IN PRODUCTION
             'TunnelsCount' : 6,
             'MaxConnPerTunnel' : 50,
             'Middlewares' : ['middle1.py', 'middle2.py'],
+            'Port' : 7787
         }
         self.config()
 
         self.holder = EvHandler(self.configuration)
-        self.connection_manager = ConnectionManager(self.configuration)
-        self.inner_gate = InnerGate(self.configuration)
+        self.connection_manager = ConnectionManager(self.configuration, self.holder)
+        self.inner_gate = InnerGate(self.configuration, self.holder)
 
     def run(self):
         '''Launchs the application, starts the main loop'''
 
         self.inner_gate.open()
 
-        while True:
-            pass
+        
 
         return 0
 
@@ -56,14 +56,13 @@ class EvHandler(object):
     for logging and solving the exceptional situations if it is possible. Debug
     is also the reason to use EvHandler'''
 
-    def __init__(self):
+    def init(self, CONFIG):
         return 0
         #TODO
 
     def warn(self):
         pass
         #TODO
-
 
 class Tunnel(object):
     '''Tunnels are the abstractions used to transmit the data from the internal gate to
@@ -74,12 +73,12 @@ class Tunnel(object):
     To avoid such an issue it is recommended to increase the tunnels count or their
     queues capacity, but be careful - these values should be balanced.'''
 
-    def __init__(self, qMax, cmanager):
+        def init(self, qMax, cmanager):
         self.stream = threading.Thread(target=self.run)
         self.queue = queue.Queue(maxsize=qMax)
         self.qu_congestion = 0
         self.qu_limit = qMax
-        self.middleware_processor = MiddlewareManager()
+        self.middleware_processor = MiddlewareManager(config)
         self.conmanager = cmanager
         self.gate = ExternalGate()
 
@@ -92,15 +91,16 @@ class Tunnel(object):
             proceed_data = self.middleware_processor.prepare(self.queue.get())
             response = self.gate.send(proceed_data)
             
-            responsed_data = self.middleware_processor.retrieve(response)
-            self.conmanager.return_to_client(retrieved_data, descriptor)
+            responsed_data = self.middleware_processor.load(response)
             self.qu_congestion = self.qu_congestion - 1
+            self.conmanager.return_to_client(responsed_data, descriptor)
 
     def get_capacity(self):
         return qu_limit - qu_congestion
 
     def enqueue(self, _data, _descriptor):
         self.queue.put((_data, _descriptor))
+        self.qu_congestion += 1
 
 
 class ConnectionManager(object):
@@ -110,15 +110,14 @@ class ConnectionManager(object):
     IMPORTANT NOTE: Don`t use the ConnectionManager to directly pass the data to the
     middleware modules. Use the MiddlewareManager instead'''
 
-    def __init__(self, conf, evhandler):
-        self.handler = evhandler
-        self.conf = conf
+    def init(self, CONFIG, evhandler):
+        self.handler = evhandle
         self.connection_table = {}
         self.tunnels = []
         self.condescriptor = 0
 
-        for i in range(self.conf[TunnelsCount]):
-            self.tunnels.append(Tunnel(self.conf['MaxConnPerTunnel'], self))
+        for i in range(CONFIG[TunnelsCount]):
+            self.tunnels.append(Tunnel(self.CONFIG['MaxConnPerTunnel'], self))
 
     def register(self, reqconn, reqaddr):
         cur_desc = self._get_descriptor()
@@ -126,9 +125,11 @@ class ConnectionManager(object):
         data = self.recv_msg(reqconn)
         
         free_tunnel = self._get_able_tunnel()
-        if free_tunnel:
-            self.tunnels[free_tunnel].queue.put(data, cur_desc)
-        else:
+        while True:
+         if free_tunnel:
+            self.tunnels[free_tunnel].enqueue(data, cur_desc)
+            break
+         else:
             self.handler.warn('tunnels_busy', 1)
             time.sleep(0.1)
 
@@ -142,9 +143,9 @@ class ConnectionManager(object):
                 package+=data
         return package
 
-    def return_to_client(self, data):
-        pass
-        #TODO
+    def return_to_client(self, data, desc):
+     
+     self.connection_table[desc][0].sendall(data)
 
     def _get_able_tunnel(self):
         _free_tunnel = False
@@ -165,10 +166,9 @@ class ConnectionManager(object):
 class MiddlewareManager(object):
     '''MiddlewareManager is used to manage the data passing through the middleware layer'''
 
-    def __init__(self, configuration):
-        
-        self.config = configuration
-        self.middleware_list = list(map((lambda x: 'middlewares/'+x), self.config['Middlewares']))
+    def init(self,CONFIG):
+       
+        self.middleware_list = list(map((lambda x: 'middlewares/'+x), CONFIG['Middlewares']))
         self.middlewares = map(__import__, self.middleware_list)
 
     def prepare(self, data):
@@ -178,7 +178,7 @@ class MiddlewareManager(object):
         "middleware" module and provide the "process" method, which takes the data argument - 
         the package, procceeded by the previous middleware (or the raw package, if it is the
         first) and returns the proceed data'''
-        _data = data
+        _data = ''
         #TODO: Should exist the way to proceed data if there are no available middlewares enabled in config
         for mid in self.middlewares: 
             _data = mid.process(data) #NOTE: It is unclear, how should it work
@@ -186,8 +186,11 @@ class MiddlewareManager(object):
         return _data
 
     def load(self, data):
-        pass
-        #TODO
+        _data = ''
+        for mid in self.middlewares: 
+            _data = mid.process(data)
+            
+        return _data
 
 
 class Gate(object):
@@ -195,7 +198,7 @@ class Gate(object):
     the wrapper over the any other connection socket, but it is strongly reccomended
     to use it as an abstract one'''
 
-    def __init__(self, event_handler=None):
+    def init(self, event_handler=None):
         self.handler = event_handler
         self.gateway = socket.socket(family=socket.AF_INET,
                                      type=socket.SOCK_STREAM)
@@ -231,11 +234,10 @@ class InnerGate(Gate):
     NOTE: Don`t use InnerGate to send responses for the clients requests. It is the task for 
     ConnectionManager'''
 
-    def __init__(self, port = 50600, event_handler=None):
+    def init(self, CONFIG, conmanager, event_handler=None):
         super().__init__(event_handler)
-        self.received_conn = ''
-        self.received_addr = ''
-        self.addr = ('127.0.0.1', port)
+        self.addr = ('127.0.0.1', CONFIG['Port'])
+        self.conmanager = conmanager
 
     def open(self, conmanager):
         super().open()
@@ -243,8 +245,8 @@ class InnerGate(Gate):
         while True:
             self.gateway.listen(5)
     
-            self.received_conn, self.received_addr = self.gateway.accept()
-            conmanager.register(self.received_conn, self.received_addr)
+            received_conn, received_addr = self.gateway.accept()
+            self.conmanager.register(self.received_conn, self.received_addr)
 
     def close(self):
         super().close()
@@ -254,7 +256,7 @@ class ExternalGate(Gate):
     '''ExternalGates are used to communicate with the remote ShadeServer, which will commutate the clients
     cleared traffic'''
 
-    def __init__(self, shadeserv, event_handler=None):
+    def init(self, shadeserv, event_handler=None):
         super().__init__(event_handler)
         self.gateway.connect(shadeserv)
 
@@ -281,6 +283,5 @@ class ExternalGate(Gate):
             return resp
 
 
-if __name__ == '__main__':
+if name == '__main__':
     Main = ShadeClient.run()
-
